@@ -3,6 +3,7 @@ package moe.chensi.volume
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -75,6 +76,20 @@ fun TrackSlider(
     Box(
         modifier = modifier
             .fillMaxWidth()
+            // Handle tap gestures (click/press)
+            .pointerInput(enabled) {
+                if (enabled) {
+                    detectTapGestures { offset ->
+                        // Calculate the new value based on tap position
+                        val tapPercentage = offset.x / size.width.toFloat()
+                        val totalRange = valueRange.endInclusive - valueRange.start
+                        val newValue = valueRange.start + (tapPercentage * totalRange)
+                        val coercedNewValue = newValue.coerceIn(valueRange.start, valueRange.endInclusive)
+                        onValueChange(coercedNewValue)
+                    }
+                }
+            }
+            // Handle drag gestures (slide)
             .pointerInput(enabled) {
                 if (enabled) {
                     var startValue = 0f

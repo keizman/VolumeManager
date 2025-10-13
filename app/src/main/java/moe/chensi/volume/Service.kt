@@ -28,6 +28,12 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MusicNote
@@ -79,7 +85,48 @@ class Service : AccessibilityService() {
     }
     private lateinit var manager: Manager
 
+    // Volume states for instant UI updates
+    private var musicVolume by mutableIntStateOf(0)
+    private var notificationVolume by mutableIntStateOf(0)
+
+    // Coroutine scope for volume polling during long press
+    private val serviceScope = CoroutineScope(Dispatchers.Main)
+    private var volumePollingJob: Job? = null
+
     private var idleTimer: CountDownTimer? = null
+
+    private fun startVolumePolling(adjustDirection: Int) {
+        // Cancel any existing polling job
+        volumePollingJob?.cancel()
+        
+        // Start continuous volume monitoring and adjustment during long press
+        volumePollingJob = serviceScope.launch {
+            while (isActive) {
+                // Continuously adjust volume while key is pressed
+                manager.audioManager.adjustSuggestedStreamVolume(
+                    adjustDirection, AudioManager.USE_DEFAULT_STREAM_TYPE, 0
+                )
+                
+                // Immediately read and update UI
+                val currentMusicVolume = manager.audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                val currentNotificationVolume = manager.audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION)
+                
+                if (currentMusicVolume != musicVolume || currentNotificationVolume != notificationVolume) {
+                    Log.i(TAG, "Volume polling: music=$currentMusicVolume, notification=$currentNotificationVolume")
+                    musicVolume = currentMusicVolume
+                    notificationVolume = currentNotificationVolume
+                }
+                
+                // Adjust every 100ms for smooth continuous change
+                delay(100)
+            }
+        }
+    }
+    
+    private fun stopVolumePolling() {
+        volumePollingJob?.cancel()
+        volumePollingJob = null
+    }
 
     private fun startIdleTimer() {
         idleTimer?.cancel()
@@ -150,12 +197,18 @@ class Service : AccessibilityService() {
 
             @Composable
             override fun Content() {
-                var volumeChanged by remember { mutableIntStateOf(0) }
+                // Initialize volumes on first composition
+                LaunchedEffect(Unit) {
+                    musicVolume = manager.audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                    notificationVolume = manager.audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION)
+                }
 
                 DisposableEffect(manager.audioManager) {
                     val receiver = object : BroadcastReceiver() {
                         override fun onReceive(context: Context?, intent: Intent?) {
-                            volumeChanged++
+                            // Update volumes when broadcast received (backup mechanism)
+                            musicVolume = manager.audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                            notificationVolume = manager.audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION)
                             startIdleTimer()
                         }
                     }
@@ -186,18 +239,20 @@ class Service : AccessibilityService() {
                                 item(AudioManager.STREAM_MUSIC) {
                                     StreamVolumeSlider(
                                         AudioManager.STREAM_MUSIC,
-                                        volumeChanged,
+                                        musicVolume,
                                         Icons.Default.MusicNote,
                                         "Music",
+                                        onVolumeUpdate = { newVolume -> musicVolume = newVolume },
                                         onChange = { startIdleTimer() })
                                 }
 
                                 item(AudioManager.STREAM_NOTIFICATION) {
                                     StreamVolumeSlider(
                                         AudioManager.STREAM_NOTIFICATION,
-                                        volumeChanged,
+                                        notificationVolume,
                                         Icons.Default.Notifications,
                                         "Notifications",
+                                        onVolumeUpdate = { newVolume -> notificationVolume = newVolume },
                                         onChange = { startIdleTimer() })
                                 }
                             }
@@ -335,7 +390,8 @@ class Service : AccessibilityService() {
         Log.i(TAG, "onInterrupt")
 
         Toast.makeText(this, "Accessibility service died!", Toast.LENGTH_SHORT).show()
-
+        
+        stopVolumePolling()
         unregisterReceiver(broadcastReceiver)
     }
 
@@ -345,7 +401,8 @@ class Service : AccessibilityService() {
         Log.i(TAG, "onDestroy")
 
         Toast.makeText(this, "Accessibility service died!", Toast.LENGTH_SHORT).show()
-
+        
+        stopVolumePolling()
         unregisterReceiver(broadcastReceiver)
     }
 
@@ -358,27 +415,67 @@ class Service : AccessibilityService() {
 
         when (event.keyCode) {
             KeyEvent.KEYCODE_VOLUME_UP -> {
-                if (event.action == KeyEvent.ACTION_DOWN) {
-                    if (view != null) {
-                        manager.audioManager.adjustSuggestedStreamVolume(
-                            AudioManager.ADJUST_RAISE, AudioManager.USE_DEFAULT_STREAM_TYPE, 0
-                        )
+                when (event.action) {
+                    KeyEvent.ACTION_DOWN -> {
+                        Log.i(TAG, "VOLUME_UP DOWN: repeat=${event.repeatCount}")
+                        
+                        // Only start polling on first press
+                        if (event.repeatCount == 0) {
+                            // Immediately adjust volume once
+                            manager.audioManager.adjustSuggestedStreamVolume(
+                                AudioManager.ADJUST_RAISE, AudioManager.USE_DEFAULT_STREAM_TYPE, 0
+                            )
+                            // Update UI immediately
+                            musicVolume = manager.audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                            notificationVolume = manager.audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION)
+                            
+                            // Show view and start continuous polling for long press
+                            showView()
+                            startVolumePolling(AudioManager.ADJUST_RAISE)
+                        }
+                        return true
                     }
-                    showView()
+                    KeyEvent.ACTION_UP -> {
+                        Log.i(TAG, "VOLUME_UP UP")
+                        stopVolumePolling()
+                        // Final sync
+                        musicVolume = manager.audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                        notificationVolume = manager.audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION)
+                        return true
+                    }
                 }
-                return true
             }
-
+            
             KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                if (event.action == KeyEvent.ACTION_DOWN) {
-                    if (view != null) {
-                        manager.audioManager.adjustSuggestedStreamVolume(
-                            AudioManager.ADJUST_LOWER, AudioManager.USE_DEFAULT_STREAM_TYPE, 0
-                        )
+                when (event.action) {
+                    KeyEvent.ACTION_DOWN -> {
+                        Log.i(TAG, "VOLUME_DOWN DOWN: repeat=${event.repeatCount}")
+                        
+                        // Only start polling on first press
+                        if (event.repeatCount == 0) {
+                            // Immediately adjust volume once
+                            manager.audioManager.adjustSuggestedStreamVolume(
+                                AudioManager.ADJUST_LOWER, AudioManager.USE_DEFAULT_STREAM_TYPE, 0
+                            )
+                            // Update UI immediately
+                            musicVolume = manager.audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                            notificationVolume = manager.audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION)
+                            
+                            // Show view and start continuous polling for long press
+                            showView()
+                            startVolumePolling(AudioManager.ADJUST_LOWER)
+                        }
+                        return true
                     }
-                    showView()
+                    KeyEvent.ACTION_UP -> {
+                        Log.i(TAG, "VOLUME_DOWN UP")
+                        stopVolumePolling()
+                        // Final sync
+                        musicVolume = manager.audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+                        notificationVolume = manager.audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION)
+                        return true
+                    }
                 }
-                return true
             }
         }
 
@@ -388,23 +485,21 @@ class Service : AccessibilityService() {
     @Composable
     fun StreamVolumeSlider(
         streamType: Int,
-        triggerChange: Int,
+        currentVolume: Int,
         icon: ImageVector,
         name: String,
+        onVolumeUpdate: (Int) -> Unit,
         onChange: (() -> Unit)? = null
     ) {
-        var volume by remember { mutableIntStateOf(manager.audioManager.getStreamVolume(streamType)) }
-
-        LaunchedEffect(triggerChange) {
-            volume = manager.audioManager.getStreamVolume(streamType)
-        }
-
         TrackSlider(
             cornerRadius = 20.dp,
-            value = volume.toFloat(),
+            value = currentVolume.toFloat(),
             valueRange = 0f..manager.audioManager.getStreamMaxVolume(streamType).toFloat(),
             onValueChange = { value ->
-                manager.audioManager.setStreamVolume(streamType, value.toInt(), 0)
+                val newVolume = value.toInt()
+                manager.audioManager.setStreamVolume(streamType, newVolume, 0)
+                // Immediately update the local state for instant UI feedback
+                onVolumeUpdate(newVolume)
                 onChange?.invoke()
             },
         ) {
