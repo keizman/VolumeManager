@@ -224,16 +224,12 @@ class Manager(context: Context, private val dataStore: DataStore<Preferences>) {
 
             dataStore.data.collect { preferences ->
                 for ((key, value) in preferences.asMap()) {
-                    try {
-                        if (key.name.startsWith("hidden:") && value is Boolean) {
-                            val packageName = key.name.substringAfter("hidden:")
-                            getOrCreateApp(packageName).updateHidden(value)
-                        } else if (value is Float) {
-                            val packageName = key.name
-                            getOrCreateApp(packageName).updateVolume(value, initializing)
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Failed to process preference for key: ${key.name}", e)
+                    if (key.name.startsWith("hidden:") && value is Boolean) {
+                        val packageName = key.name.substringAfter("hidden:")
+                        getOrCreateApp(packageName).updateHidden(value)
+                    } else if (value is Float) {
+                        val packageName = key.name
+                        getOrCreateApp(packageName).updateVolume(value, initializing)
                     }
                 }
 
@@ -251,23 +247,19 @@ class Manager(context: Context, private val dataStore: DataStore<Preferences>) {
         val runningProcesses = activityManager.runningAppProcesses
 
         for (config in configs) {
-            try {
-                val player = getPlayerProxyMethod.invoke(config) ?: continue
+            val player = getPlayerProxyMethod.invoke(config) ?: continue
 
-                val pid = getClientPidMethod.invoke(config) as Int
-                val process = runningProcesses.find { process -> process.pid == pid } ?: continue
+            val pid = getClientPidMethod.invoke(config) as Int
+            val process = runningProcesses.find { process -> process.pid == pid } ?: continue
 
-                val packageName = process.processName.split(":")[0]
-                // It's possible to get the user ID from `process.uid / UserHandle.PER_USER_RANGE`.
-                // But since we need to get app info from all users at startup anyway,
-                // let's just reuse the method here.
-                val app = getOrCreateApp(packageName)
+            val packageName = process.processName.split(":")[0]
+            // It's possible to get the user ID from `process.uid / UserHandle.PER_USER_RANGE`.
+            // But since we need to get app info from all users at startup anyway,
+            // let's just reuse the method here.
+            val app = getOrCreateApp(packageName)
 
-                setVolumeMethod.invoke(player, app.volume)
-                app.players.add(Player(config, player))
-            } catch (e: Exception) {
-                Log.w(TAG, "Failed to process audio playback configuration", e)
-            }
+            setVolumeMethod.invoke(player, app.volume)
+            app.players.add(Player(config, player))
         }
     }
 }
