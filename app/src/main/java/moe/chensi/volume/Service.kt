@@ -867,7 +867,7 @@ class Service : AccessibilityService() {
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
             when (event.keyCode) {
                 KeyEvent.KEYCODE_VOLUME_UP, KeyEvent.KEYCODE_VOLUME_DOWN -> {
-                    checkKeySequence(event.keyCode)
+                    // checkKeySequence(event.keyCode)
                     
                     // If we just toggled test mode, consume the event
                     if (System.currentTimeMillis() - lastKeyPressTime < 100) {
